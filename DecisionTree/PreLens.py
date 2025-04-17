@@ -1,4 +1,4 @@
-import src
+import src1
 
 f = open('DecisionTree/input/lenses.txt')
 a = f.readlines()
@@ -18,4 +18,4 @@ def datapro(filepath):
 labels = ['age of the patient','spectacle prescription','astigmatic','tear production rate']
 data = datapro('DecisionTree/input/lenses.txt')
 featureL = []
-print(src.createTree(data,labels,featureL))
+print(src1.createTree(data,labels,featureL))

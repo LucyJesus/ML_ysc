@@ -1,0 +1,295 @@
+"""连续性数据的离散化操作(分箱或者分段)
+"""
+#由于实际应用中一般属性取值为连续数据，并非离散型数据，所以这里先对数据进行预处理，实现对每一个属性的取值进行分段
+import numpy as np
+
+class DataBinWrapper(object):
+    '''
+    传入除类标签外的训练样本
+    '''
+    def __init__(self, max_bins=10):
+        # 分段数
+        self.max_bins = max_bins
+        # 记录x各个属性的分段区间
+        self.XrangeMap = None
+        
+    def fit(self, x):
+        n_sample, n_feature = x.shape
+        # 构建分段数据
+        self.XrangeMap = [[] for _ in range(0, n_feature)]
+        for index in range(0, n_feature):
+            tmp = sorted(x[:, index])#对连续数据从小到大进行排序
+            for percent in range(1, self.max_bins):#选取10,20,30,40,50，……，百分位值
+                percent_value = np.percentile(tmp, (1.0 * percent / self.max_bins) * 100.0 // 1)#找到每一列中对应百分位的数据
+                self.XrangeMap[index].append(percent_value)
+            self.XrangeMap[index] = sorted(list(set(self.XrangeMap[index])))#记录每一列的百分位值
+
+    def transform(self, x):
+        """
+        抽取x_bin_index(对连续数据做分段处理使其离散化)
+        :param x:
+        :return:每一列属性中的值处于的分段区间段,只需要知道该属性取值对应哪个区间段便可以求熵
+        """
+        if x.ndim == 1:
+            return np.asarray([np.digitize(x[i], self.XrangeMap[i]) for i in range(0, x.size)])#每个数据所在的区间段
+        else:
+            return np.asarray([np.digitize(x[:, i], self.XrangeMap[i]) for i in range(0, x.shape[1])]).T
+
+databin = DataBinWrapper(max_bins=2)
+x = np.arange(16).reshape(8,2)
+print(x)
+databin.fit(x)
+print(databin.XrangeMap)
+print(databin.transform(x))
+
+
+#这里实现ID3,C4.5算法的决策树基本模型
+import operator
+class DecisiontreeClassifier(object):
+    class Node(object):
+        """
+        树节点，用于存储节点信息以及关联子节点
+        """
+
+        def __init__(self, feature_index: int = None, target_distribute: dict = None, weight_distribute: dict = None,
+                     children_nodes: dict = None, num_sample: int = None):
+            """
+            :param feature_index: 属性id
+            :param target_distribute: 目标分布
+            :param children_nodes: 子节点
+            :param num_sample:样本量
+            """
+            self.feature_index = feature_index
+            self.target_distribute = target_distribute
+            self.children_nodes = children_nodes
+            self.num_sample = num_sample
+
+    def __init__(self, criterion='c4.5', max_depth=None, min_samples_split=2, max_bins=10):
+        """
+        :param criterion:划分标准，包括id3,c4.5，默认为c4.5
+        :param max_depth:树的最大深度
+        :param min_samples_split:当对一个内部结点划分时，要求该结点上的最小样本数，默认为2
+        :param max_bins:对属性取值的划分段数
+
+        `max_depth`控制树的最大深度，
+        `min_samples_split`控制结点划分的最小样本数，
+        通过调节这些参数，可以达到类似剪枝的效果
+        """
+        self.criterion = criterion
+        if criterion == 'c4.5':
+            self.criterion_func = self.info_gain_rate
+        else:
+            self.criterion_func = self.muti_info
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+
+        self.root_node = None
+        self.sample_weight = None
+        self.dbw = DataBinWrapper(max_bins=max_bins)
+
+    def entropy(self,x):
+        """
+        计算信息熵
+        """
+        x = np.asarray(x)#转化为数组
+        # x中元素个数
+        x_num = len(x)
+        x_counter = {}
+        # 统计各x取值出现的次数
+        for index in range(0, x_num):
+            x_value = x[index]
+            if x_counter.get(x_value) is None:
+                x_counter[x_value] = 0
+            x_counter[x_value] += 1
+        # print(f'x_counter:{x_counter}')
+        # print(f'weight_counter:{weight_counter}')
+        # 计算熵
+        ent = .0
+        for key, value in x_counter.items():
+            p_i = 1.0 * value / x_num 
+            ent += -p_i * np.log(p_i)
+        return ent
+
+    def cond_entropy(self,x, y):
+        """
+        计算条件熵:H(y|x)
+        """
+        x = np.asarray(x)
+        y = np.asarray(y)
+        # x中元素个数
+        x_num = len(x)
+        # 计算
+        ent = .0
+        for x_value in set(x):#对x中所有可能取值进行划分数据
+            x_index = np.where(x == x_value)
+            new_x = x[x_index]
+            new_y = y[x_index]
+            p_i = 1.0 * len(new_x) / x_num
+            ent += p_i * self.entropy(new_y)
+        return ent
+    
+    def muti_info(self,x, y):
+        """
+        互信息/信息增益:H(y)-H(y|x)
+        """
+        return self.entropy(y) - self.cond_entropy(x, y)
+
+    def info_gain_rate(self,x,y):
+        '''
+        信息增益比
+        '''
+        return 1.0 * self.muti_info(x,y)/(1e-12+self.entropy(x))
+
+    def majorityCnt(self,y):
+        """
+        majorityCnt(选择出现次数最多的一个结果)
+        Args:
+            y 标签列
+        Returns:
+            bestFeature 最优的属性列
+        """
+        # -----------majorityCnt的第一种方式 start------------------------------------
+        classCount = {}
+        for vote in y:
+            if vote not in classCount.keys():
+                classCount[vote] = 0
+            classCount[vote] += 1
+        # 倒叙排列classCount得到一个字典集合，然后取出第一个就是出现次数最多的结果
+        sortedClassCount = sorted(classCount.items(), key=operator.itemgetter(1), reverse=True)
+        return sortedClassCount[0][0]
+
+    def _build_tree(self, current_depth, current_node: Node, x, y,labels):
+        """
+        递归进行属性选择，构建树
+        """
+        rows, cols = x.shape
+        # 计算当前数据y中每一类的分布，预测测试数据时需要用到
+        target_distribute = {}
+
+        for index, tmp_value in enumerate(y):
+            if tmp_value not in target_distribute:
+                target_distribute[tmp_value] = 0.0
+            target_distribute[tmp_value] += 1.0
+            
+        for key, value in target_distribute.items():
+            target_distribute[key] = value / rows
+        
+        #记录当前数据y的分布
+        current_node.target_distribute = target_distribute
+
+        #记录当前节点的样本数
+        current_node.num_sample = rows
+        
+    
+        # 停止切分的条件
+        #判断y中数据为空或为同一类数据
+        if len(target_distribute) <= 1:
+            return self.majorityCnt(y)
+        
+        #判断当前节点样本数是否符合对内部节点划分的要求，数据必须多于2个才需要划分
+        if rows < self.min_samples_split:
+            return self.majorityCnt(y)
+
+        #判断树的深度是否超过规定的最大深度
+        if self.max_depth is not None and current_depth > self.max_depth:
+            return self.majorityCnt(y)
+
+        # 寻找最佳的属性
+        best_index = None
+        best_criterion_value = 0
+
+        #遍历当前所有的属性
+        for index in range(0, cols):
+            criterion_value = self.criterion_func(x[:, index], y)
+            if criterion_value > best_criterion_value:
+                best_criterion_value = criterion_value
+                best_index = index
+
+        current_node.feature_index = best_index
+        
+        # best_index在最后一次划分结束后不会再变化，作为判断停止切分的条件
+        if best_index is None:
+            return self.majorityCnt(y)
+
+        #记录最优属性 
+        bestFeatLabel = labels[best_index]
+        myTree = {bestFeatLabel: {}}
+
+        # 切分数据，链接子节点
+        children_nodes = {}
+        current_node.children_nodes = children_nodes
+        selected_x = x[:, best_index]
+        for item in set(selected_x):
+
+            selected_index = np.where(selected_x == item)
+            child_node = self.Node()
+            #每个分支均需传入一个节点类
+            children_nodes[item] = child_node
+            #递归构建该属性不同取值下的决策树
+            myTree[bestFeatLabel][item] = self._build_tree(current_depth + 1, child_node, x[selected_index], y[selected_index],labels)
+        return myTree
+
+    def fit(self, x, y,labels):
+        '''
+        x:训练数据
+        y:标签
+        labels:属性名称
+        '''
+        # 构建空的根节点
+        self.root_node = self.Node()
+
+        # 对x分箱
+        self.dbw.fit(x)
+        
+        # 递归构建树
+        mytree = self._build_tree(1, self.root_node, self.dbw.transform(x), y,labels)
+        return mytree
+
+    # 遍历训练之后的决策树，来对测试数据分类
+    def _search_node(self, current_node: Node, x, class_num):
+        if current_node.feature_index is None or current_node.children_nodes is None or len(
+                current_node.children_nodes) == 0 or current_node.children_nodes.get(
+            x[current_node.feature_index]) is None:
+            result = []
+            total_value = 0.0
+            #记录属于每个类别的概率
+            for index in range(0, class_num):
+                value = current_node.target_distribute.get(index, 0)
+                result.append(value)
+                total_value += value
+            for index in range(0, class_num):
+                result[index] = result[index] / total_value #归一化
+            return result
+        else:
+            #对于给定分类数据，遍历对应属性值下的树
+            return self._search_node(current_node.children_nodes.get(x[current_node.feature_index]), x, class_num)
+
+    def predict_proba(self, x):
+        # 计算结果概率分布
+        #对要预测的数据进行分箱操作
+        x = self.dbw.transform(x)
+        rows = x.shape[0]
+        results = []
+        class_num = len(self.root_node.target_distribute)
+        #遍历每一个数据
+        for row in range(0, rows):
+            results.append(self._search_node(self.root_node, x[row], class_num))
+        return np.asarray(results)
+
+    def predict(self, x):
+        #最大概率对应的索引值记为最终类别
+        return np.argmax(self.predict_proba(x), axis=1)
+    
+from sklearn.datasets import make_classification
+data, target = make_classification(n_samples=100, n_features=2, n_classes=2, n_informative=1, n_redundant=0,
+                                   n_repeated=0, n_clusters_per_class=1, class_sep=.5,random_state=21)
+
+from sklearn.model_selection import train_test_split
+x_train,x_test,y_train,y_test = train_test_split(data,target,test_size=0.2)
+
+#训练
+labels = ['属性0','属性1']
+tree = DecisiontreeClassifier(max_bins=2)
+mytree = tree.fit(x_train, y_train,labels)
+tree.predict_proba(x_test)#每一个样本都会返回属于每个类的概率，从中选择最大值对应的索引
+# print(mytree)

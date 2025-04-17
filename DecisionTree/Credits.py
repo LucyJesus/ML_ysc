@@ -1,4 +1,4 @@
-import src
+import src1
 
 """
 age: 0:青年:1:中年:2:老年
@@ -28,5 +28,5 @@ def createDataSet():
 
 dataSet, labels = createDataSet()
 featLabels = []
-myTree = src.createTree(dataSet, labels, featLabels)
+myTree = src1.createTree(dataSet, labels, featLabels)
 print(myTree)

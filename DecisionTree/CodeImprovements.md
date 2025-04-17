@@ -46,3 +46,19 @@ labels = ['age of the patient','spectacle prescription','astigmatic','tear produ
 data = datapro('DecisionTree/input/lenses.txt')
 featureL = []
 print(src.createTree(data,labels,featureL))</code></pre>
+
+## src2.py
+
+<pre><code>databin = DataBinWrapper(max_bins=2)
+x = np.arange(16).reshape(8,2)
+print(x)
+databin.fit(x)
+print(databin.XrangeMap)
+databin.transform(x)</code></pre>
+
+<pre><code>databin = DataBinWrapper(max_bins=2)
+x = np.arange(16).reshape(8,2)
+print(x)
+databin.fit(x)
+print(databin.XrangeMap)
+print(databin.transform(x))</code></pre>
